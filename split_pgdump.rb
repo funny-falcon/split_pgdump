@@ -65,13 +65,33 @@ FileUtils.rm_f output_file
 FileUtils.rm_rf Dir[File.join(tables_dir, '*')]
 FileUtils.mkdir_p tables_dir
 
-state = :raw
+state = :schema
+table, columns = nil, nil
+table_file_name, table_file = nil, nil
 IO.popen(pg_dump) do |dump|
   File.open(output_file, 'w') do |out|
     for line in dump
       case state
-      when :raw
-        out.write line
+      when :schema
+        if line =~ /^COPY (\w+) \(([^)]+)\) FROM stdin;/
+          table, columns = $1, $2.split(', ')
+          table_file_name = File.join(tables_dir, table)
+          table_file = File.new(table_file_name, 'w')
+          puts "Start to write table #{table}" if $debug
+          state = :table
+        else
+          out.write line
+        end
+      when :table
+        table_file.write(line)
+        if line[0,2] == '\.'
+          table_file.close
+          out.write "\\copy #{table} (#{columns.join(', ')}) from #{table_file_name}"
+          state = :schema
+          table, columns = nil, nil
+          table_file_name = nil
+          table_file = nil
+        end
       end
     end
   end
