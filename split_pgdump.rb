@@ -6,6 +6,7 @@ rules_file = 'split.rules'
 output_file = 'dump.sql'
 $debug = false
 pg_dump = [`which pg_dump`.chomp]
+sort = `which sort`.chomp
 
 opts = OptionParser.new
 opts.on("-r", "--rules=RULES_FILE", "File with rules on table splitting (default 'split.rules')") {|v| rules_files = v}
@@ -83,14 +84,18 @@ IO.popen(pg_dump) do |dump|
           out.write line
         end
       when :table
-        table_file.write(line)
-        if line[0,2] == '\.'
+        if line =~ /^\\\.[\r\n]/
           table_file.close
+          puts "Sorting table #{table}" if $debug
+          system(sort, '-n', '-o', table_file_name, table_file_name)
+          File.open(table_file_name, 'a'){|f| f.write(line)}
           out.write "\\copy #{table} (#{columns.join(', ')}) from #{table_file_name}"
           state = :schema
           table, columns = nil, nil
           table_file_name = nil
           table_file = nil
+        else
+          table_file.write(line)
         end
       end
     end
