@@ -1,0 +1,55 @@
+= Tool for splitting postgresql dump in a set of files
+
+I wish to use git or mercurial for managing my database history.
+Unfortunately, every single data change force them to store whole dump again.
+Even if you data actually not changed, rows order is not promised to be stable.
+
+split_pgdump splits dump in a set of small sorted files, so that git could track
+changes only of atcually changed data.
+
+Also, it allows rsync to effectevely transmit backup changes over network.
+
+== Usage
+
+Simplest example:
+
+  > pg_dump my_base | split_pgdump
+
+It produces:
+  `dump.sql`  - file with schema and psql copy instructions, 
+  `dump.sql-tables/#{table}.dat` - 'copy data' for each table in a dump, 
+              sorted numerically (I hope, it is `id`)
+
+You can change file name by `-f` option.
+
+=== Rules
+Rules are read from `split.rules` file (could be changed by `-r` option).
+File could contain set of lines:
+
+table_regexp  {split:<Split expr>} {sort:<Sort expr>}
+
+<Split expr> examples:
+  split:$field_name!
+  split:$field_name!_$other_field!
+  split:$client_id%00100!-$id%0025000!
+  split:$some_field[2..-1]!/$other_field[10..30]%0005!
+
+<Sort expr> is space separated list of fields, optionally with options for
+gnu `sort` --key parameters (on my machine they are MbdfghinRrV):
+  sort:client_id uid
+  sort:client_id:n id:n
+
+Example for redmines wiki_content_versions:
+
+wiki_content_versions split:$page_id%0025!/$id%0000250! sort:page_id:n id:n
+
+Either `split:` or `sort:` option could be skipped.
+
+== Author and Copyright
+
+Copyright (c) 2011 by Sokolov Yura (funny.falcon@gmail.com)
+Released under the same terms of license as Ruby
+
+== Homepage
+
+https://github.com/funny-falcon/split_pgdump

@@ -116,11 +116,17 @@ class Rule
     while !s.eos?
       if field = s.scan(/\$[^\[%]+/)
         field = field[1..-1]
-        if range = s.scan(/\[[+-]?\d+\.\.\.?[+-]?\d+\]/)
-          parts << {:type=> :field, :field=> field, :range => range[1..-2]}
-        elsif mod = s.scan(/%\d+/)
-          parts << {:type=> :field, :field => field, :mod => mod[1..-1]}
+        part = {:type => :field, :field => field, :actions => []}
+        while !s.eos?
+          if range = s.scan(/\[[+-]?\d+\.\.\.?[+-]?\d+\]/)
+            part[:actions] << {:range => range}
+          elsif mod = s.scan(/%\d+/)
+            part[:actions] << {:mod => mod[1..-1]}
+          else
+            break
+          end
         end
+        parts << part
         if sep = s.scan(/![^$\s#\\]*/)
           if sep > '!'
             parts << {:type => :sep, :sep => sep[1..-1]}
@@ -203,6 +209,10 @@ class Table
     @total_cache_size = 0
   end
 
+  def _mod(s, len, mod)
+    "%0#{len}d" % (s.to_i / mod * mod)
+  end
+
   def apply_rule
     split_string = ''
     @rule.split_parts.each do |part|
@@ -213,16 +223,16 @@ class Table
         i = @columns.find_index(part[:field])
         raise NoColumn, part[:field]  unless i
         field = "values[#{i}]"
-        if part[:mod]
-          mod_s = part[:mod]
-          mod = mod_s.to_i
-          split_string << "\#{'%0#{mod_s.size}d' % (#{field}.to_i / #{mod} * #{mod})}"
-        else
-          if part[:range]
-            field += "[#{part[:range]}]"
+        part[:actions].each do |action|
+          if action[:mod]
+            mod_s = action[:mod]
+            mod = mod_s.to_i
+            field = "_mod(#{field},#{mod_s.size},#{mod})"
+          elsif action[:range]
+            field << "#{action[:range]}"
           end
-          split_string << "\#{#{field}\}"
         end
+        split_string << "\#{#{field}}"
       end
     end
 
@@ -285,7 +295,10 @@ Usage: pg_dump my_base | split_pgdump [-r RULES_FILE] [-f DUMP_FILE] [-s SORT_BI
 split_pgdump intend for producing stable set of small files instead of one
 big dump file. Such set is suitable for being source for SCM systems, being
 effectivly transmitted using rsync, repacking by 7z and other.
+
 "
+
+  opts.separator("Options:")
 
   opts.on("-r", "--rules=RULES_FILE", "File with rules on table splitting (default 'split.rules')") do |v|
     Worker.rules_file = v
@@ -299,6 +312,27 @@ effectivly transmitted using rsync, repacking by 7z and other.
   end
   opts.on("-d", "--debug", "debug"){|v| $debug = true}
   opts.on_tail("-h", "--help", "this message"){|v| puts opts; exit}
+
+  opts.on_tail("\
+Rules file format:
+table_regexp  {split:<Split expr>} {sort:<Sort expr>}
+
+<Split expr> examples:
+  split:$field_name!
+  split:$field_name!_$other_field!
+  split:$client_id%00100!-$id%0025000!
+  split:$some_field[2..-1]!/$other_field[10..30]%0005!
+
+<Sort expr> is space separated list of fields, optionally with options for
+gnu `sort` --key parameters (on my machine they are MbdfghinRrV):
+  sort:client_id uid
+  sort:client_id:n id:n
+
+Example for redmines wiki_content_versions:
+
+wiki_content_versions split:$page_id%0025!/$id%0000250! sort:page_id:n id:n
+")
+
 end.parse!
 
 Worker.parse_rules
