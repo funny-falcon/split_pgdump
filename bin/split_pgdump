@@ -58,7 +58,7 @@ class CWorker
   def process_copy_line(out, line)
     if line =~ /^\\\.[\r\n]/
       @table.flush_all
-      @table.copy_lines.each{|l| out.puts l}
+      @table.copy_lines{|l| out.puts l}
       @table = nil
       @state = :schema
     else
@@ -266,7 +266,7 @@ class Table
         yield "\\copy #{@table} (#{@columns.join(', ')}) from #{one_file.file_name}"
       end
     else
-      Enumerator.new(self, :copy_lines)
+      to_enum(:copy_lines)
     end
   end
 
