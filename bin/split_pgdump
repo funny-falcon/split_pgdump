@@ -3,16 +3,20 @@
 require 'optparse'
 require 'fileutils'
 require 'strscan'
+require 'thread'
 
 $debug = false
 
 class CWorker
-  attr_accessor :rules_file, :output_file, :sorter, :rules
+  attr_accessor :rules_file, :output_file, :sorter, :rules, :num_workers
   def initialize
     @rules_file = 'split.rules'
     @output_file = 'dump.sql'
     @sorter = `which sort`.chomp
     @rules = []
+    @num_workers = 2
+    @io_workers = []
+    @queue = Queue.new
   end
 
   def tables_dir
@@ -70,6 +74,7 @@ class CWorker
   end
 
   def work
+    start_io_workers
     @state = :schema
     @table = nil
     @tables = []
@@ -87,6 +92,32 @@ class CWorker
     end
 
     @tables.each{|table| table.finish_all}
+    stop_io_workers
+  end
+
+  def start_io_workers
+    @num_workers.times do
+      @io_workers << Thread.new do
+        while (job = @queue.pop) != :stop
+          job.call
+        end
+      end
+    end
+  end
+
+  def stop_io_workers
+    (@num_workers +1).times do
+      @queue.push :stop
+    end
+    @io_workers.each{|w| w.join}
+  end
+
+  def add_job(&block)
+    if @num_workers > 0
+      @queue.push block
+    else
+      block.call
+    end
   end
 end
 
@@ -165,7 +196,6 @@ class Table
     def add_line(line)
       @cache_lines << line
       @cache_size += line.size
-      flush if @cache_size > ONE_FILE_CACHE_SIZE
     end
 
     def flush
@@ -268,14 +298,31 @@ class Table
     values = line.chomp.split("\t")
     fname = file_name(values)
     one_file = @files[fname] ||= OneFile.new(@dir, fname)
-    @total_cache_size -= one_file.cache_size
     one_file.add_line(line)
-    @total_cache_size += one_file.cache_size
+    @total_cache_size += line.size
+    if one_file.cache_size > ONE_FILE_CACHE_SIZE
+      @total_cache_size -= one_file.cache_size
+      one_file.flush
+    end
     flush_all if @total_cache_size > TOTAL_CACHE_SIZE
   end
 
   def flush_all
-    @files.each{|name, one_file| one_file.flush}
+    if @files.size < 10
+      @files.each{|name, one_file| one_file.flush}
+    else
+      counter = @files.size
+      queue = Queue.new
+      @files.each do |name, one_file|
+        Worker.add_job{
+          one_file.flush
+          queue.push 1
+        }
+      end
+      while counter > 0
+        counter -= queue.pop
+      end
+    end
     @total_cache_size = 0
   end
 
@@ -291,8 +338,10 @@ class Table
 
   def finish_all
     @files.each do |name, one_file|
-      one_file.sort(@sort_args)
-      one_file.write_finish
+      Worker.add_job do
+        one_file.sort(@sort_args)
+        one_file.write_finish
+      end
     end
   end
 end
@@ -318,6 +367,9 @@ effectivly transmitted using rsync, repacking by 7z and other.
   end
   opts.on("-s", "--sort=SORT_BIN", "sort executable compatible with gnu coreutils sort") do |v|
     Worker.sorter = v
+  end
+  opts.on("-n", "--workers=NUM", Integer, "number of parallel workers for sorting") do |n|
+    Worker.num_workers = n
   end
   opts.on("-d", "--debug", "debug"){|v| $debug = true}
   opts.on_tail("-h", "--help", "this message"){|v| puts opts; exit}
