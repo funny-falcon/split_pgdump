@@ -8,7 +8,7 @@ Gem::Specification.new do |s|
     "It allows to effectively use SCM tools to store history of data changes and rsync\n"
     "to transfer changes over network"
   s.authors = ["Sokolov Yura aka funny_falcon"]
-  s.emails  = ["funny.falcon@gmail.com"]
+  s.email  = "funny.falcon@gmail.com"
   s.files   = ["bin/split_pgdump", "README"]
   s.executables << "split_pgdump"
   s.homepage = "https://github.com/funny-falcon/split_pgdump"
