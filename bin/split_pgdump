@@ -3,20 +3,19 @@
 require 'optparse'
 require 'fileutils'
 require 'strscan'
-require 'thread'
 
 $debug = false
 
 class CWorker
-  attr_accessor :rules_file, :output_file, :sorter, :rules, :num_workers
+  attr_accessor :rules_file, :output_file, :sorter, :rules, :num_sorters
+  attr_accessor :could_fork
   def initialize
     @rules_file = 'split.rules'
     @output_file = 'dump.sql'
     @sorter = `which sort`.chomp
     @rules = []
-    @num_workers = 0
-    @io_workers = []
-    @queue = Queue.new
+    @num_sorters = 0
+    @could_fork = true
   end
 
   def tables_dir
@@ -53,6 +52,7 @@ class CWorker
       @table = Table.new(tables_dir, @schema, table_name, columns)
       @tables << @table
       puts "Start to write table #{table_name}" if $debug
+      @start_time = Time.now
       @state = :table
     else
       if line =~ /^SET search_path = ([^,]+)/
@@ -66,6 +66,7 @@ class CWorker
     if line =~ /^\\\.[\r\n]/
       @table.flush_all
       @table.copy_lines{|l| out.puts l}
+      puts "Table #{@table.table} copied in #{Time.now - @start_time}s" if $debug
       @table = nil
       @state = :schema
     else
@@ -74,7 +75,6 @@ class CWorker
   end
 
   def work
-    start_io_workers
     @state = :schema
     @table = nil
     @tables = []
@@ -91,32 +91,34 @@ class CWorker
       end
     end
 
-    @tables.each{|table| table.finish_all}
-    stop_io_workers
+    @start_time = Time.now
+    sort_and_finish
+    puts "Finished in #{Time.now - @start_time}s #{Process.pid}" if $debug
   end
 
-  def start_io_workers
-    @num_workers.times do
-      @io_workers << Thread.new do
-        while (job = @queue.pop) != :stop
-          job.call
-        end
+  def sort_and_finish
+    files = []
+    for table in @tables
+      for one_file in table.files.values
+        files << [table.sort_args, one_file]
       end
     end
-  end
-
-  def stop_io_workers
-    (@num_workers +1).times do
-      @queue.push :stop
-    end
-    @io_workers.each{|w| w.join}
-  end
-
-  def add_job(&block)
-    if @num_workers > 0
-      @queue.push block
+    if @num_sorters > 1
+      files.each_slice(@num_sorters) do |one_files|
+        cmd = one_files.map{|sort_args, one_file| 
+          one_file.sort_args(sort_args).map{|a|"'#{a}'"}.join(' ') 
+        }
+        cmd = cmd.map{|c| "{ #{c} & }"}  if @could_fork
+        cmd = cmd.join(' ; ')
+        cmd += ' ; wait '  if @could_fork
+        system cmd
+        one_files.each{|sort_args, one_file| one_file.write_finish}
+      end
     else
-      block.call
+      files.each do |sort_args, one_file|
+        one_file.sort sort_args
+        one_file.write_finish
+      end
     end
   end
 end
@@ -198,16 +200,15 @@ class Table
       @cache_size += line.size
     end
 
-    def flush
+    def flush(&block)
+      @cache_size = 0
       dir = File.dirname(@file_name)
       unless File.directory?(dir)
         FileUtils.mkdir_p(dir)
       end
-      File.open(@file_name, 'a') do |f|
-        f.write(@cache_lines.join)
-      end
+      content = @cache_lines.join
+      File.open(@file_name, 'a'){|f| f.write(content)}
       @cache_lines.clear
-      @cache_size = 0
     end
 
     def write_finish
@@ -216,7 +217,7 @@ class Table
       end
     end
 
-    def sort(sort_line = [])
+    def sort_args(sort_line = [])
       args = [Worker.sorter]
       if sort_line && !sort_line.empty?
         args.concat sort_line
@@ -225,11 +226,15 @@ class Table
       end
       args.push '-o', @file_name, @file_name
       puts args.join(' ')  if $debug
-      system *args
+      args
+    end
+
+    def sort(sort_line = [])
+      system *sort_args(sort_line)
     end
   end
 
-  attr_reader :name, :columns, :files, :sort_line
+  attr_reader :table, :columns, :files, :sort_line, :sort_args
   def initialize(dir, schema, name, columns)
     @dir = dir
     @table = name
@@ -273,7 +278,7 @@ class Table
 
     eval <<-"EOF"
       def self.file_name(values)
-        name = %{#{split_string}}.gsub(/\\.\\.|\\s|\\?|\\*/, '_')
+        name = %{#{split_string}}.gsub(/\\.\\.|\\s|\\?|\\*|'|"/, '_')
         "\#{table_schema}/\#{name}.dat"
       end
     EOF
@@ -308,21 +313,7 @@ class Table
   end
 
   def flush_all
-    if @files.size < 10
-      @files.each{|name, one_file| one_file.flush}
-    else
-      counter = @files.size
-      queue = Queue.new
-      @files.each do |name, one_file|
-        Worker.add_job{
-          one_file.flush
-          queue.push 1
-        }
-      end
-      while counter > 0
-        counter -= queue.pop
-      end
-    end
+    @files.each{|name, one_file| one_file.flush}
     @total_cache_size = 0
   end
 
@@ -333,15 +324,6 @@ class Table
       end
     else
       to_enum(:copy_lines)
-    end
-  end
-
-  def finish_all
-    @files.each do |name, one_file|
-      Worker.add_job do
-        one_file.sort(@sort_args)
-        one_file.write_finish
-      end
     end
   end
 end
@@ -368,8 +350,12 @@ effectivly transmitted using rsync, repacking by 7z and other.
   opts.on("-s", "--sort=SORT_BIN", "sort executable compatible with gnu coreutils sort (default `which sort`)") do |v|
     Worker.sorter = v
   end
-  opts.on("-n", "--workers=NUM", Integer, "number of parallel workers for sorting (default 0 - disable)") do |n|
-    Worker.num_workers = n
+  opts.on("-n", "--sorters=NUM", Integer, "number of sorters started in a shell",
+                                          "(1 or 0 for safe command line) (default 0)") do |n|
+    Worker.num_sorters = n
+  end
+  opts.on("--no-shell-fork", "could not use shell & for parrallel execution of sorters") do 
+    Worker.could_fork = true
   end
   opts.on("-d", "--debug", "debug"){|v| $debug = true}
   opts.on_tail("-h", "--help", "this message"){|v| puts opts; exit}
