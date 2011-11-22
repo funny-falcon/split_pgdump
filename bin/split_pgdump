@@ -1,26 +1,92 @@
 #!/usr/bin/env ruby
+# vim: set syntax=ruby shiftwidth=2 softtabstop=2 tabstop=8 expandtab
 require 'optparse'
 require 'fileutils'
 require 'strscan'
 
-rules_file = 'split.rules'
-output_file = 'dump.sql'
 $debug = false
-SORT = `which sort`.chomp
 
-opts = OptionParser.new
-opts.on("-r", "--rules=RULES_FILE", "File with rules on table splitting (default 'split.rules')") {|v| rules_files = v}
-opts.on("-f", "--file=FILE", "main file name (default 'dump.sql').", "Table content will be storred in FILE-tables directory") {|v| output_file = v}
-opts.on("-d", "--debug", "debug"){|v| $debug = true}
-opts.on_tail("--help", "this message"){|v| puts opts; exit}
+class CWorker
+  attr_accessor :rules_file, :output_file, :sorter, :rules
+  def initialize
+    @rules_file = 'split.rules'
+    @output_file = 'dump.sql'
+    @sorter = `which sort`.chomp
+    @rules = []
+  end
 
-opts.parse(ARGV)
+  def tables_dir
+    output_file + '-tables'
+  end
 
-tables_dir = output_file + '-tables'
+  def clear_files
+    FileUtils.rm_f output_file
+    FileUtils.rm_rf Dir[File.join(tables_dir, '*')]
+    FileUtils.mkdir_p tables_dir
+  end
 
-FileUtils.rm_f output_file
-FileUtils.rm_rf Dir[File.join(tables_dir, '*')]
-FileUtils.mkdir_p tables_dir
+  def parse_rules
+    if File.exists?(rules_file)
+      File.open(rules_file) do |f|
+        f.each_line do |line|
+          if rule = Rule.parse(line)
+            @rules << rule
+          end
+        end
+      end
+    else
+      puts "NO FILE #{rules_file}"  if $debug
+    end
+  end
+
+  def find_rule(table)
+    @rules.find{|rule| table =~ rule.regex}
+  end
+
+  def process_schema_line(out, line)
+    if line =~ /^COPY (\w+) \(([^)]+)\) FROM stdin;/
+      table_name, columns = $1, $2.split(', ')
+      @table = Table.new(tables_dir, table_name, columns)
+      @tables << @table
+      puts "Start to write table #{table_name}" if $debug
+      @state = :table
+    else
+      out.write line
+    end
+  end
+
+  def process_copy_line(out, line)
+    if line =~ /^\\\.[\r\n]/
+      @table.flush_all
+      @table.copy_lines.each{|l| out.puts l}
+      @table = nil
+      @state = :schema
+    else
+      @table.add_line(line)
+    end
+  end
+
+  def work
+    @state = :schema
+    @table = nil
+    @tables = []
+
+    File.open(output_file, 'w') do |out|
+      STDIN.each_line do |line|
+        case @state
+        when :schema
+          process_schema_line(out, line)
+        when :table
+          process_copy_line(out, line)
+        end
+      end
+    end
+
+    @tables.each{|table| table.finish_all}
+  end
+end
+
+Worker = CWorker.new
 
 class Rule
   class ParseError < StandardError; end
@@ -74,21 +140,6 @@ class Rule
   end
 end
 
-Rules = []
-if File.exists?(rules_file)
-  File.open(rules_file) do |f|
-    f.each_line do |line|
-      if rule = Rule.parse(line)
-        Rules << rule
-      end
-    end
-  end
-end
-
-def Rules.find_rule(table_name)
-  find{|rule| table_name =~ rule.regex}
-end
-
 class Table
   class NoColumn < StandardError; end
   ONE_FILE_CACHE_SIZE = 128 * 1024
@@ -126,7 +177,7 @@ class Table
     end
 
     def sort(sort_line = [])
-      args = [SORT]
+      args = [Worker.sorter]
       if sort_line && !sort_line.empty?
         args.concat sort_line
       else
@@ -143,7 +194,7 @@ class Table
     @dir = dir
     @table = name
     @columns = columns.map{|c| c.sub(/^"(.+)"$/, '\\1')}
-    if @rule = Rules.find_rule(name)
+    if @rule = Worker.find_rule(name)
       apply_rule
     else
       @split_args = []
@@ -227,34 +278,29 @@ class Table
   end
 end
 
-state = :schema
-dump_lines, table = [], nil
-tables = []
+opts = OptionParser.new do |opts|
+  opts.banner = "\
+Usage: pg_dump my_base | split_pgdump [-r RULES_FILE] [-f DUMP_FILE] [-s SORT_BIN] [-d]
 
-File.open(output_file, 'w') do |out|
-  STDIN.each_line do |line|
-    case state
-    when :schema
-      if line =~ /^COPY (\w+) \(([^)]+)\) FROM stdin;/
-        table_name, columns = $1, $2.split(', ')
-        table = Table.new(tables_dir, table_name, columns)
-        tables << table
-        puts "Start to write table #{table_name}" if $debug
-        state = :table
-      else
-        out.write line
-      end
-    when :table
-      if line =~ /^\\\.[\r\n]/
-        table.flush_all
-        table.copy_lines.each{|l| out.puts l}
-        table = nil
-        state = :schema
-      else
-        table.add_line(line)
-      end
-    end
+split_pgdump intend for producing stable set of small files instead of one
+big dump file. Such set is suitable for being source for SCM systems, being
+effectivly transmitted using rsync, repacking by 7z and other.
+"
+
+  opts.on("-r", "--rules=RULES_FILE", "File with rules on table splitting (default 'split.rules')") do |v|
+    Worker.rules_file = v
   end
-end
+  opts.on("-f", "--file=FILE", "main file name (default 'dump.sql').",
+          "Table content will be storred in FILE-tables directory") do |v|
+    Worker.output_file = v
+  end
+  opts.on("-s", "--sort=SORT_BIN", "sort executable compatible with gnu coreutils sort") do |v|
+    Worker.sorter = v
+  end
+  opts.on("-d", "--debug", "debug"){|v| $debug = true}
+  opts.on_tail("-h", "--help", "this message"){|v| puts opts; exit}
+end.parse!
 
-tables.each{|table| table.finish_all}
+Worker.parse_rules
+Worker.clear_files
+Worker.work
