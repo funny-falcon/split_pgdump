@@ -14,7 +14,7 @@ class CWorker
     @output_file = 'dump.sql'
     @sorter = `which sort`.chomp
     @rules = []
-    @num_workers = 2
+    @num_workers = 0
     @io_workers = []
     @queue = Queue.new
   end
@@ -183,7 +183,7 @@ end
 
 class Table
   class NoColumn < StandardError; end
-  ONE_FILE_CACHE_SIZE = 128 * 1024
+  ONE_FILE_CACHE_SIZE = 256 * 1024
   TOTAL_CACHE_SIZE = 5 * 1024 * 1024
   class OneFile
     attr_reader :file_name, :cache_size
@@ -204,7 +204,7 @@ class Table
         FileUtils.mkdir_p(dir)
       end
       File.open(@file_name, 'a') do |f|
-        @cache_lines.each{|l| f.write(l)}
+        f.write(@cache_lines.join)
       end
       @cache_lines.clear
       @cache_size = 0
@@ -365,10 +365,10 @@ effectivly transmitted using rsync, repacking by 7z and other.
           "Table content will be storred in FILE-tables directory") do |v|
     Worker.output_file = v
   end
-  opts.on("-s", "--sort=SORT_BIN", "sort executable compatible with gnu coreutils sort") do |v|
+  opts.on("-s", "--sort=SORT_BIN", "sort executable compatible with gnu coreutils sort (default `which sort`)") do |v|
     Worker.sorter = v
   end
-  opts.on("-n", "--workers=NUM", Integer, "number of parallel workers for sorting") do |n|
+  opts.on("-n", "--workers=NUM", Integer, "number of parallel workers for sorting (default 0 - disable)") do |n|
     Worker.num_workers = n
   end
   opts.on("-d", "--debug", "debug"){|v| $debug = true}
