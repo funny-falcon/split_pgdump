@@ -46,11 +46,14 @@ class CWorker
   def process_schema_line(out, line)
     if line =~ /^COPY (\w+) \(([^)]+)\) FROM stdin;/
       table_name, columns = $1, $2.split(', ')
-      @table = Table.new(tables_dir, table_name, columns)
+      @table = Table.new(tables_dir, @schema, table_name, columns)
       @tables << @table
       puts "Start to write table #{table_name}" if $debug
       @state = :table
     else
+      if line =~ /^SET search_path = ([^,]+)/
+        @schema = $1
+      end
       out.write line
     end
   end
@@ -70,6 +73,7 @@ class CWorker
     @state = :schema
     @table = nil
     @tables = []
+    @schema = 'public'
 
     File.open(output_file, 'w') do |out|
       STDIN.each_line do |line|
@@ -196,9 +200,10 @@ class Table
   end
 
   attr_reader :name, :columns, :files, :sort_line
-  def initialize(dir, name, columns)
+  def initialize(dir, schema, name, columns)
     @dir = dir
     @table = name
+    @schema = schema
     @columns = columns.map{|c| c.sub(/^"(.+)"$/, '\\1')}
     if @rule = Worker.find_rule(name)
       apply_rule
@@ -239,7 +244,7 @@ class Table
     eval <<-"EOF"
       def self.file_name(values)
         name = %{#{split_string}}.gsub(/\\.\\.|\\s|\\?|\\*/, '_')
-        "\#@table/\#{name}.dat"
+        "\#{table_schema}/\#{name}.dat"
       end
     EOF
 
@@ -251,8 +256,12 @@ class Table
     end
   end
 
+  def table_schema
+    @schema == 'public' ? @table : "#@schema/#@table"
+  end
+
   def file_name(values)
-    "#@table.dat"
+    "#{table_schema}.dat"
   end
 
   def add_line(line)
