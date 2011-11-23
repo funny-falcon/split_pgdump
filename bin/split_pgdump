@@ -261,7 +261,7 @@ class Table
         split_string << part[:sep]
       when :field
         i = @columns.find_index(part[:field])
-        raise NoColumn, part[:field]  unless i
+        raise NoColumn, "Table #{@schema}.#{@table} has no column #{key[:field]} for use in split"  unless i
         field = "values[#{i}]"
         part[:actions].each do |action|
           if action[:mod]
@@ -285,7 +285,7 @@ class Table
 
     @sort_args = @rule.sort_keys.map do |key|
       i = @columns.find_index(key[:field])
-      raise NoColumn, key[:field]  unless i
+      raise NoColumn, "Table #{@schema}.#{@table} has no column #{key[:field]} for use in sort"  unless i
       i += 1
       "--key=#{i},#{i}#{key[:flags]}"
     end
