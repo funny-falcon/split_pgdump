@@ -151,7 +151,7 @@ class Rule
     s = StringScanner.new(split_expr || '')
     parts = []
     while !s.eos?
-      if field = s.scan(/\$[^\[%]+/)
+      if field = s.scan(/\$[^\[%!]+/)
         field = field[1..-1]
         part = {:type => :field, :field => field, :actions => []}
         while !s.eos?
@@ -171,7 +171,7 @@ class Rule
           next
         end
       end
-      raise ParseError, "Wrong format of split expr #{split_expr} (rest: #{s.rest})"
+      raise ParseError, "Wrong format of split expr #{split_expr} (rest: '#{s.rest}')"
     end
     @split_parts = parts
   end
@@ -261,7 +261,7 @@ class Table
         split_string << part[:sep]
       when :field
         i = @columns.find_index(part[:field])
-        raise NoColumn, "Table #{@schema}.#{@table} has no column #{key[:field]} for use in split"  unless i
+        raise NoColumn, "Table #{@schema}.#{@table} has no column #{part[:field]} for use in split"  unless i
         field = "values[#{i}]"
         part[:actions].each do |action|
           if action[:mod]

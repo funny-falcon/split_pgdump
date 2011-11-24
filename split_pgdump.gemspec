@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name = 'split_pgdump'
-  s.version = '0.3.1'
+  s.version = '0.3.2'
   s.date = '2011-11-22'
   s.summary = 'split_pgdump is a tool for splitting postgresql dump in a managable set of files'
   s.description = 
