@@ -6,7 +6,7 @@ require 'strscan'
 
 $debug = false
 
-class CWorker
+class Worker
   attr_accessor :rules_file, :output_file, :sorter, :rules, :num_sorters
   attr_accessor :could_fork
   def initialize
@@ -49,7 +49,8 @@ class CWorker
   def process_schema_line(out, line)
     if line =~ /^COPY (\w+) \(([^)]+)\) FROM stdin;/
       table_name, columns = $1, $2.split(', ')
-      @table = Table.new(tables_dir, @schema, table_name, columns)
+      rule = find_rule("#@schema.#{table_name}")
+      @table = Table.new(tables_dir, @schema, table_name, columns, rule)
       @tables << @table
       puts "Start to write table #{table_name}" if $debug
       @start_time = Time.now
@@ -74,14 +75,14 @@ class CWorker
     end
   end
 
-  def work
+  def work(in_stream)
     @state = :schema
     @table = nil
     @tables = []
     @schema = 'public'
 
     File.open(output_file, 'w') do |out|
-      STDIN.each_line do |line|
+      in_stream.each_line do |line|
         case @state
         when :schema
           process_schema_line(out, line)
@@ -106,7 +107,7 @@ class CWorker
     if @num_sorters > 1
       files.each_slice(@num_sorters) do |one_files|
         cmd = one_files.map{|sort_args, one_file| 
-          one_file.sort_args(sort_args).map{|a|"'#{a}'"}.join(' ') 
+          one_file.sort_args(sort_args).unshift(@sorter).map{|a|"'#{a}'"}.join(' ') 
         }
         cmd = cmd.map{|c| "{ #{c} & }"}  if @could_fork
         cmd = cmd.join(' ; ')
@@ -116,14 +117,12 @@ class CWorker
       end
     else
       files.each do |sort_args, one_file|
-        one_file.sort sort_args
+        system(sorter, *one_file.sort_args(sort_args))
         one_file.write_finish
       end
     end
   end
 end
-
-Worker = CWorker.new
 
 class Rule
   class ParseError < StandardError; end
@@ -218,7 +217,7 @@ class Table
     end
 
     def sort_args(sort_line = [])
-      args = [Worker.sorter]
+      args = []
       if sort_line && !sort_line.empty?
         args.concat sort_line
       else
@@ -228,23 +227,15 @@ class Table
       puts args.join(' ')  if $debug
       args
     end
-
-    def sort(sort_line = [])
-      system *sort_args(sort_line)
-    end
   end
 
   attr_reader :table, :columns, :files, :sort_line, :sort_args
-  def initialize(dir, schema, name, columns)
+  def initialize(dir, schema, name, columns, rule)
     @dir = dir
     @table = name
     @schema = schema
     @columns = columns.map{|c| c.sub(/^"(.+)"$/, '\\1')}
-    if @rule = Worker.find_rule(name)
-      apply_rule
-    else
-      @split_args = []
-    end
+    apply_rule rule
     @files = {}
     @total_cache_size = 0
   end
@@ -253,41 +244,45 @@ class Table
     "%0#{len}d" % (s.to_i / mod * mod)
   end
 
-  def apply_rule
-    split_string = ''
-    @rule.split_parts.each do |part|
-      case part[:type]
-      when :sep
-        split_string << part[:sep]
-      when :field
-        i = @columns.find_index(part[:field])
-        raise NoColumn, "Table #{@schema}.#{@table} has no column #{part[:field]} for use in split"  unless i
-        field = "values[#{i}]"
-        part[:actions].each do |action|
-          if action[:mod]
-            mod_s = action[:mod]
-            mod = mod_s.to_i
-            field = "_mod(#{field},#{mod_s.size},#{mod})"
-          elsif action[:range]
-            field << "#{action[:range]}"
+  def apply_rule(rule)
+    if rule
+      split_string = ''
+      rule.split_parts.each do |part|
+        case part[:type]
+        when :sep
+          split_string << part[:sep]
+        when :field
+          i = @columns.find_index(part[:field])
+          raise NoColumn, "Table #{@schema}.#{@table} has no column #{part[:field]} for use in split"  unless i
+          field = "values[#{i}]"
+          part[:actions].each do |action|
+            if action[:mod]
+              mod_s = action[:mod]
+              mod = mod_s.to_i
+              field = "_mod(#{field},#{mod_s.size},#{mod})"
+            elsif action[:range]
+              field << "#{action[:range]}"
+            end
           end
+          split_string << "\#{#{field}}"
         end
-        split_string << "\#{#{field}}"
       end
-    end
 
-    eval <<-"EOF"
-      def self.file_name(values)
-        name = %{#{split_string}}.gsub(/\\.\\.|\\s|\\?|\\*|'|"/, '_')
-        "\#{table_schema}/\#{name}.dat"
+      eval <<-"EOF"
+        def self.file_name(values)
+          name = %{#{split_string}}.gsub(/\\.\\.|\\s|\\?|\\*|'|"/, '_')
+          "\#{table_schema}/\#{name}.dat"
+        end
+      EOF
+
+      @sort_args = rule.sort_keys.map do |key|
+        i = @columns.find_index(key[:field])
+        raise NoColumn, "Table #{@schema}.#{@table} has no column #{key[:field]} for use in sort"  unless i
+        i += 1
+        "--key=#{i},#{i}#{key[:flags]}"
       end
-    EOF
-
-    @sort_args = @rule.sort_keys.map do |key|
-      i = @columns.find_index(key[:field])
-      raise NoColumn, "Table #{@schema}.#{@table} has no column #{key[:field]} for use in sort"  unless i
-      i += 1
-      "--key=#{i},#{i}#{key[:flags]}"
+    else
+      @sort_args = []
     end
   end
 
@@ -328,8 +323,10 @@ class Table
   end
 end
 
-opts = OptionParser.new do |opts|
-  opts.banner = "\
+class ComandLineWorker < Worker
+  def parse_comand_line
+    opts = OptionParser.new do |opts|
+      opts.banner = "\
 Usage: pg_dump my_base | split_pgdump [-r RULES_FILE] [-f DUMP_FILE] [-s SORT_BIN] [-d]
 
 split_pgdump intend for producing stable set of small files instead of one
@@ -338,29 +335,29 @@ effectivly transmitted using rsync, repacking by 7z and other.
 
 "
 
-  opts.separator("Options:")
+      opts.separator("Options:")
 
-  opts.on("-r", "--rules=RULES_FILE", "File with rules on table splitting (default 'split.rules')") do |v|
-    Worker.rules_file = v
-  end
-  opts.on("-f", "--file=FILE", "main file name (default 'dump.sql').",
-          "Table content will be storred in FILE-tables directory") do |v|
-    Worker.output_file = v
-  end
-  opts.on("-s", "--sort=SORT_BIN", "sort executable compatible with gnu coreutils sort (default `which sort`)") do |v|
-    Worker.sorter = v
-  end
-  opts.on("-n", "--sorters=NUM", Integer, "number of sorters started in a shell",
-                                          "(1 or 0 for safe command line) (default 0)") do |n|
-    Worker.num_sorters = n
-  end
-  opts.on("--no-shell-fork", "could not use shell & for parrallel execution of sorters") do 
-    Worker.could_fork = true
-  end
-  opts.on("-d", "--debug", "debug"){|v| $debug = true}
-  opts.on_tail("-h", "--help", "this message"){|v| puts opts; exit}
+      opts.on("-r", "--rules=RULES_FILE", "File with rules on table splitting (default 'split.rules')") do |v|
+        self.rules_file = v
+      end
+      opts.on("-f", "--file=FILE", "main file name (default 'dump.sql').",
+              "Table content will be storred in FILE-tables directory") do |v|
+        self.output_file = v
+      end
+      opts.on("-s", "--sort=SORT_BIN", "sort executable compatible with gnu coreutils sort (default `which sort`)") do |v|
+        self.sorter = v
+      end
+      opts.on("-n", "--sorters=NUM", Integer, "number of sorters started in a shell",
+                                              "(1 or 0 for safe command line) (default 0)") do |n|
+        self.num_sorters = n
+      end
+      opts.on("--no-shell-fork", "could not use shell & for parrallel execution of sorters") do 
+        self.could_fork = true
+      end
+      opts.on("-d", "--debug", "debug"){|v| $debug = true}
+      opts.on_tail("-h", "--help", "this message"){|v| puts opts; exit}
 
-  opts.on_tail("\
+      opts.on_tail("\
 Rules file format:
 table_regexp  {split:<Split expr>} {sort:<Sort expr>}
 
@@ -378,10 +375,16 @@ gnu `sort` --key parameters (on my machine they are MbdfghinRrV):
 Example for redmines wiki_content_versions:
 
 wiki_content_versions split:$page_id%0025!/$id%0000250! sort:page_id:n id:n
-")
+    ")
 
-end.parse!
+    end.parse!
+  end
+end
 
-Worker.parse_rules
-Worker.clear_files
-Worker.work
+if $0 == __FILE__
+  worker = ComandLineWorker.new
+  worker.parse_comand_line
+  worker.parse_rules
+  worker.clear_files
+  worker.work(STDIN)
+end
