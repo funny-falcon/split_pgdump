@@ -7,7 +7,11 @@ require 'shellwords'
 
 $debug = false
 
-class Worker
+module SplitPgDump
+  VERSION = '0.3.4'
+end
+
+class SplitPgDump::Worker
   attr_accessor :rules_file, :output_file, :sorter, :rules, :num_sorters
   attr_accessor :could_fork, :xargs
   def initialize
@@ -34,7 +38,7 @@ class Worker
     if File.exists?(rules_file)
       File.open(rules_file) do |f|
         f.each_line do |line|
-          if rule = Rule.parse(line)
+          if rule = SplitPgDump::Rule.parse(line)
             @rules << rule
           end
         end
@@ -52,7 +56,7 @@ class Worker
     if line =~ /^COPY (\w+) \(([^)]+)\) FROM stdin;/
       table_name, columns = $1, $2.split(', ')
       rule = find_rule("#@schema.#{table_name}")
-      @table = Table.new(tables_dir, @schema, table_name, columns, rule)
+      @table = SplitPgDump::Table.new(tables_dir, @schema, table_name, columns, rule)
       @tables << @table
       puts "Start to write table #{table_name}" if $debug
       @start_time = Time.now
@@ -143,7 +147,7 @@ class Worker
   end
 end
 
-class Rule
+class SplitPgDump::Rule
   class ParseError < StandardError; end
 
   attr_reader :regex, :split_parts, :sort_keys
@@ -201,7 +205,7 @@ class Rule
   end
 end
 
-class Table
+class SplitPgDump::Table
   class NoColumn < StandardError; end
   ONE_FILE_CACHE_SIZE = 256 * 1024
   TOTAL_CACHE_SIZE = 5 * 1024 * 1024
@@ -342,10 +346,12 @@ class Table
   end
 end
 
-class ComandLineWorker < Worker
+class SplitPgDump::ComandLineWorker < SplitPgDump::Worker
   def parse_comand_line
     opts = OptionParser.new do |opts|
+      opts.version = SplitPgDump::VERSION
       opts.banner = "\
+#{opts.program_name} #{opts.version}
 Usage: pg_dump my_base | split_pgdump [-r RULES_FILE] [-f DUMP_FILE] [-s SORT_BIN] [-d]
 
 split_pgdump intend for producing stable set of small files instead of one
@@ -379,6 +385,10 @@ effectivly transmitted using rsync, repacking by 7z and other.
         self.xargs = ''
       end
       opts.on("-d", "--debug", "debug"){|v| $debug = true}
+      opts.on_tail("-v", "--version", "show version") do
+        puts opts.version
+        exit
+      end
       opts.on_tail("-h", "--help", "this message"){|v| puts opts; exit}
 
       opts.on_tail("\
@@ -406,7 +416,7 @@ wiki_content_versions split:$page_id%0025!/$id%0000250! sort:page_id:n id:n
 end
 
 if $0 == __FILE__
-  worker = ComandLineWorker.new
+  worker = SplitPgDump::ComandLineWorker.new
   worker.parse_comand_line
   worker.parse_rules
   worker.clear_files
