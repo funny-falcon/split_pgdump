@@ -3,16 +3,18 @@
 require 'optparse'
 require 'fileutils'
 require 'strscan'
+require 'shellwords'
 
 $debug = false
 
 class Worker
   attr_accessor :rules_file, :output_file, :sorter, :rules, :num_sorters
-  attr_accessor :could_fork
+  attr_accessor :could_fork, :xargs
   def initialize
     @rules_file = 'split.rules'
     @output_file = 'dump.sql'
     @sorter = `which sort`.chomp
+    @xargs = `which xargs`.chomp
     @rules = []
     @num_sorters = 0
     @could_fork = true
@@ -101,26 +103,43 @@ class Worker
     files = []
     for table in @tables
       for one_file in table.files.values
-        files << [table.sort_args, one_file]
+        sort_args = one_file.sort_args(table.sort_args).shelljoin
+        files << [one_file, sort_args]
       end
     end
-    if @num_sorters > 1
-      files.each_slice(@num_sorters) do |one_files|
-        cmd = one_files.map{|sort_args, one_file| 
-          one_file.sort_args(sort_args).unshift(@sorter).map{|a|"'#{a}'"}.join(' ') 
+    unless @xargs.empty?
+      num_sorters = [@num_sorters, 1].max
+      xargs_cmd = [@xargs, '-L1', '-P', num_sorters.to_s, @sorter].shelljoin
+      puts xargs_cmd  if $debug
+      IO.popen(xargs_cmd, 'w+') do |io|
+        files.each{|one_file, sort_args|
+          puts sort_args  if $debug
+          io.puts sort_args
         }
-        cmd = cmd.map{|c| "{ #{c} & }"}  if @could_fork
-        cmd = cmd.join(' ; ')
-        cmd += ' ; wait '  if @could_fork
-        system cmd
-        one_files.each{|sort_args, one_file| one_file.write_finish}
+        io.close_write
+        io.each_line{|l| 
+          puts l  if $debug
+        }
       end
     else
-      files.each do |sort_args, one_file|
-        system(sorter, *one_file.sort_args(sort_args))
-        one_file.write_finish
+      sorter = @sorter.shellescape
+      commands = files.map{|one_file, sort_args| "#{sorter} #{sort_args}" }
+      if @num_sorters > 1
+        commands.each_slice(@num_sorters) do |cmd|
+          cmd = cmd.map{|c| "{ #{c} & }"}  if @could_fork
+          cmd = cmd.join(' ; ')
+          cmd += ' ; wait '  if @could_fork
+          puts cmd  if $debug
+          system cmd
+        end
+      else
+        commands.each do |cmd|
+          puts cmd  if $debug
+          system cmd
+        end
       end
     end
+    files.each{|one_file, sort_args| one_file.write_finish}
   end
 end
 
@@ -186,6 +205,7 @@ class Table
   class NoColumn < StandardError; end
   ONE_FILE_CACHE_SIZE = 256 * 1024
   TOTAL_CACHE_SIZE = 5 * 1024 * 1024
+
   class OneFile
     attr_reader :file_name, :cache_size
     def initialize(dir, name)
@@ -224,7 +244,6 @@ class Table
         args << '-n'
       end
       args.push '-o', @file_name, @file_name
-      puts args.join(' ')  if $debug
       args
     end
   end
@@ -347,12 +366,17 @@ effectivly transmitted using rsync, repacking by 7z and other.
       opts.on("-s", "--sort=SORT_BIN", "sort executable compatible with gnu coreutils sort (default `which sort`)") do |v|
         self.sorter = v
       end
-      opts.on("-n", "--sorters=NUM", Integer, "number of sorters started in a shell",
-                                              "(1 or 0 for safe command line) (default 0)") do |n|
-        self.num_sorters = n
+      opts.on("-n", "--sorters=NUM", Integer, "number of sorters started in a shell") do |n|
+        self.num_sorters = n.to_i
       end
       opts.on("--no-shell-fork", "could not use shell & for parrallel execution of sorters") do 
-        self.could_fork = true
+        self.could_fork = false
+      end
+      opts.on("-x", "--xargs=XARGS_BIN", "xargs executable (-L and -P options used) (default `which xargs`)") do |v|
+        self.xargs = v
+      end
+      opts.on("--no-xargs", 'explicitly disable xargs') do
+        self.xargs = ''
       end
       opts.on("-d", "--debug", "debug"){|v| $debug = true}
       opts.on_tail("-h", "--help", "this message"){|v| puts opts; exit}
