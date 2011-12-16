@@ -1,4 +1,4 @@
-Kernel.load './bin/split_pgdump'
+Kernel.load './lib/split_pgdump.rb'
 Gem::Specification.new do |s|
   s.name = 'split_pgdump'
   s.version = SplitPgDump::VERSION
@@ -10,7 +10,8 @@ Gem::Specification.new do |s|
     "to transfer changes over network"
   s.authors = ["Sokolov Yura aka funny_falcon"]
   s.email  = "funny.falcon@gmail.com"
-  s.files   = ["bin/split_pgdump", "README"]
+  s.require_paths = ["lib"]
+  s.files   = ["bin/split_pgdump", "README", "lib/split_pgdump.rb"]
   s.executables << "split_pgdump"
   s.homepage = "https://github.com/funny-falcon/split_pgdump"
   s.licenses = ["GPL"]
