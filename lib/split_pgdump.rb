@@ -206,8 +206,8 @@ end
 
 class SplitPgDump::Table
   class NoColumn < StandardError; end
-  ONE_FILE_CACHE_SIZE = 256 * 1024
-  TOTAL_CACHE_SIZE = 1 * 1024 * 1024
+  ONE_FILE_CACHE_SIZE = 3 * 128 * 1024
+  TOTAL_CACHE_SIZE = 4 * 128 * 1024
 
   class OneFile
     attr_reader :file_name, :cache_size
