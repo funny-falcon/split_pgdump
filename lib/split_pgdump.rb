@@ -7,7 +7,7 @@ require 'shellwords'
 $debug = false
 
 module SplitPgDump
-  VERSION = '0.3.5'
+  VERSION = '0.3.6'
 end
 
 class SplitPgDump::Worker
