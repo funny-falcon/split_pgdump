@@ -336,8 +336,8 @@ class SplitPgDump::Table
 
   def copy_lines
     if block_given?
-      @files.each do |name, one_file|
-        yield "\\copy #{@table} (#{@columns.join(', ')}) from #{one_file.file_name}"
+      @files.map{|n, one_file| one_file.file_name}.sort.each do |file_name|
+        yield "\\copy #{@table} (#{@columns.join(', ')}) from #{file_name}"
       end
     else
       to_enum(:copy_lines)
