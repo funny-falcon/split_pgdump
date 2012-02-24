@@ -257,13 +257,14 @@ class SplitPgDump::Table
     @table = name
     @schema = schema
     @columns = columns.map{|c| c.sub(/^"(.+)"$/, '\\1')}
+    @file_name = "#{table_schema}.dat"
     apply_rule rule
     @files = {}
     @total_cache_size = 0
   end
 
-  def _mod(s, len, mod)
-    "%0#{len}d" % (s.to_i / mod * mod)
+  def _mod(s, format, mod)
+    format % (s.to_i / mod * mod)
   end
 
   def apply_rule(rule)
@@ -281,7 +282,7 @@ class SplitPgDump::Table
             if action[:mod]
               mod_s = action[:mod]
               mod = mod_s.to_i
-              field = "_mod(#{field},#{mod_s.size},#{mod})"
+              field = "_mod(#{field}, '%0#{mod_s.size}d', #{mod})"
             elsif action[:range]
               field << "#{action[:range]}"
             end
@@ -290,12 +291,19 @@ class SplitPgDump::Table
         end
       end
 
-      eval <<-"EOF"
-        def self.file_name(values)
-          name = %{#{split_string}}.gsub(/\\.\\.|\\s|\\?|\\*|'|"/, '_')
-          "\#{table_schema}/\#{name}.dat"
-        end
-      EOF
+      if split_string > ''
+        @file_name = {}
+        eval <<-"EOF"
+          def self.file_name(line)
+            values = line.chomp.split("\\t")
+            name = %{#{split_string}}
+            @file_name[name] ||= begin
+              name_strip = name.gsub(/\\.\\.|\\s|\\?|\\*|'|"/, '_')
+              "\#{table_schema}/\#{name_strip}.dat"
+            end
+          end
+        EOF
+      end
 
       @sort_args = rule.sort_keys.map do |key|
         i = @columns.find_index(key[:field])
@@ -312,13 +320,12 @@ class SplitPgDump::Table
     @schema == 'public' ? @table : "#@schema/#@table"
   end
 
-  def file_name(values)
-    "#{table_schema}.dat"
+  def file_name(line)
+    @file_name
   end
 
   def add_line(line)
-    values = line.chomp.split("\t")
-    fname = file_name(values)
+    fname = file_name(line)
     one_file = @files[fname] ||= OneFile.new(@dir, fname)
     one_file.add_line(line)
     @total_cache_size += line.size
