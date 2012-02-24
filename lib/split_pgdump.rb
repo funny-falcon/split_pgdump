@@ -251,6 +251,24 @@ class SplitPgDump::Table
     end
   end
 
+  module DefaultName
+    def file_name(line)
+      @file_name
+    end
+  end
+  include DefaultName
+
+  module ComputeName
+    def file_name(line)
+      values = line.chomp.split("\t")
+      name = compute_name(values)
+      @file_name[name] ||= begin
+        name_strip = name.gsub(/\.\.|\s|\?|\*|'|"/, '_')
+        "#{table_schema}/#{name_strip}.dat"
+      end
+    end
+  end
+
   attr_reader :table, :columns, :files, :sort_line, :sort_args
   def initialize(dir, schema, name, columns, rule)
     @dir = dir
@@ -294,15 +312,11 @@ class SplitPgDump::Table
       if split_string > ''
         @file_name = {}
         eval <<-"EOF"
-          def self.file_name(line)
-            values = line.chomp.split("\\t")
-            name = %{#{split_string}}
-            @file_name[name] ||= begin
-              name_strip = name.gsub(/\\.\\.|\\s|\\?|\\*|'|"/, '_')
-              "\#{table_schema}/\#{name_strip}.dat"
-            end
+          def self.compute_name(values)
+            %{#{split_string}}
           end
         EOF
+        extend ComputeName
       end
 
       @sort_args = rule.sort_keys.map do |key|
