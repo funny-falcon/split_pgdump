@@ -185,12 +185,10 @@ class SplitPgDump::Rule
           end
         end
         parts << part
-        if sep = s.scan(/![^$\s#\\]*/)
-          if sep > '!'
-            parts << {:type => :sep, :sep => sep[1..-1]}
-          end
-          next
-        end
+        next if s.scan(/!/)
+      elsif sep = s.scan(/[^$\s#\\]+/)
+        parts << {:type => :sep, :sep => sep}
+        next
       end
       raise ParseError, "Wrong format of split expr #{split_expr} (rest: '#{s.rest}')"
     end
