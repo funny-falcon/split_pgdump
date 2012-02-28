@@ -12,7 +12,7 @@ Gem::Specification.new do |s|
   s.email  = "funny.falcon@gmail.com"
   s.extensions = ["ext/split_pgdump/extconf.rb"]
   s.require_paths = ["lib", "ext"]
-  s.files   = ["bin/split_pgdump", "README", "lib/split_pgdump.rb", "ext/split_pgdump/extconf.rb", "ext/split_pgdump/native_interpret.c"]
+  s.files   = ["bin/split_pgdump", "README", "lib/split_pgdump.rb", "ext/split_pgdump/extconf.rb", "ext/split_pgdump/native_compute_name.c"]
   s.executables << "split_pgdump"
   s.homepage = "https://github.com/funny-falcon/split_pgdump"
   s.licenses = ["GPL"]

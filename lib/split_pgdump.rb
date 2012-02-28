@@ -7,14 +7,13 @@ require 'shellwords'
 $debug = false
 
 module SplitPgDump
-  VERSION = '0.3.6'
+  VERSION = '0.4.0'
 end
 
-#begin
+begin
   require 'split_pgdump/native_compute_name'
-#rescue LoadError
-#  raise
-#end
+rescue LoadError
+end
 
 class SplitPgDump::Worker
   attr_accessor :rules_file, :output_file, :sorter, :rules, :num_sorters
@@ -289,10 +288,8 @@ class SplitPgDump::Table
     end
   end
   if defined?(SplitPgDump::NativeComputeName)
-    puts "NATIVE"
     include SplitPgDump::NativeComputeName
   else
-    puts "NONATIVE"
     include ComputeName
   end
 
