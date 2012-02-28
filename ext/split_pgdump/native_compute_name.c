@@ -78,9 +78,11 @@ spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
 	    long size = RSTRING_LEN(rule);
 	    if (capa < pos + size + 1) {
 		char *tmp;
-		while (capa < pos + size + 1) {
-		    capa *= 2;
+		if (i + 1 == rule_len) {
+		    capa = pos + size + 1;
 		}
+		else
+		    while (capa < pos + size + 1) capa *= 2;
 		tmp = (char*) xrealloc(result, capa);
 		if (!tmp) {
 		    xfree(result);
