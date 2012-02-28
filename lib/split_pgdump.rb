@@ -10,6 +10,12 @@ module SplitPgDump
   VERSION = '0.3.6'
 end
 
+#begin
+  require 'split_pgdump/native_compute_name'
+#rescue LoadError
+#  raise
+#end
+
 class SplitPgDump::Worker
   attr_accessor :rules_file, :output_file, :sorter, :rules, :num_sorters
   attr_accessor :could_fork, :xargs
@@ -280,7 +286,13 @@ class SplitPgDump::Table
       false
     end
   end
-  include ComputeName
+  if defined?(SplitPgDump::NativeComputeName)
+    puts "NATIVE"
+    include SplitPgDump::NativeComputeName
+  else
+    puts "NONATIVE"
+    include ComputeName
+  end
 
   attr_reader :table, :columns, :files, :sort_line, :sort_args
   def initialize(dir, schema, name, columns, rule)

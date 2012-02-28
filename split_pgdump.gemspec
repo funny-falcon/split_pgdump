@@ -10,8 +10,9 @@ Gem::Specification.new do |s|
     "to transfer changes over network"
   s.authors = ["Sokolov Yura aka funny_falcon"]
   s.email  = "funny.falcon@gmail.com"
-  s.require_paths = ["lib"]
-  s.files   = ["bin/split_pgdump", "README", "lib/split_pgdump.rb"]
+  s.extensions = ["ext/split_pgdump/extconf.rb"]
+  s.require_paths = ["lib", "ext"]
+  s.files   = ["bin/split_pgdump", "README", "lib/split_pgdump.rb", "ext/split_pgdump/extconf.rb", "ext/split_pgdump/native_interpret.c"]
   s.executables << "split_pgdump"
   s.homepage = "https://github.com/funny-falcon/split_pgdump"
   s.licenses = ["GPL"]
