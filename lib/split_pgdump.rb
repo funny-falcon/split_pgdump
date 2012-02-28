@@ -389,14 +389,14 @@ class SplitPgDump::Table
   def add_line(line)
     fname = @split_rule ? file_name(line) : @file_name
     one_file = @files[fname] ||= OneFile.new(@dir, fname)
+
+    @files_to_flush[one_file] = true  if one_file.cache_size == 0
+
     one_file.add_line(line)
     @total_cache_size += line.size
     if one_file.cache_size > ONE_FILE_CACHE_SIZE
       @total_cache_size -= one_file.cache_size
       one_file.flush
-      @files_to_flush.delete(one_file)
-    else
-      @files_to_flush[one_file] = true
     end
     flush_all if @total_cache_size > TOTAL_CACHE_SIZE
   end
