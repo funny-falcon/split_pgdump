@@ -1,5 +1,7 @@
 #include "ruby.h"
 #include "ruby/intern.h"
+#include "ruby/defines.h"
+#include "ruby/encoding.h"
 
 static ID idDiv;
 static ID idMul;
@@ -19,12 +21,18 @@ apply_actions(VALUE field, VALUE actions)
 	    if (RTEST(rb_range_beg_len(action, &beg, &len, len, 0)))
 		field = rb_str_substr(field, beg, len);
 	} else if (klass == rb_cArray) {
-	    num = rb_str2inum(field, 10);
+	    num = rb_str_to_inum(field, 10, 0);
 	    modi = rb_ary_entry(action, 1);
-	    if (FIXNUM_P(num) && FIXNUM_P(modi) && FIX2LONG(modi)) {
-		long modl = FIX2LONG(modi);
+	    if ( (FIXNUM_P(num) ||
+		      TYPE(num) == T_BIGNUM &&
+		      RBIGNUM_LEN(num) <= (SIZEOF_LONG/SIZEOF_BDIGITS)
+		  ) &&
+		  FIXNUM_P(modi) &&
+		  FIX2LONG(modi)) {
+		long modl = NUM2LONG(modi);
 		long numl = (FIX2LONG(num) / modl) * modl;
 		char buf[30];
+
 		int wrtn = snprintf(buf, 30,
 			RSTRING_PTR(rb_ary_entry(action, 0)),
 			numl);
@@ -47,8 +55,10 @@ apply_actions(VALUE field, VALUE actions)
 static VALUE
 spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
 {
-    char *result = (char*) xmalloc(INITIAL_CAPA);
     VALUE res = 0;
+    int encoding = -1;
+    char fixbuf[INITIAL_CAPA];
+    char *result = fixbuf;
     int pos = 0, capa = INITIAL_CAPA;
     long i, rule_len = RARRAY_LEN(split_rule);
     if (!result) {
@@ -60,6 +70,7 @@ spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
 	    long fieldnum = NUM2LONG(rb_ary_entry(rule, 0));
 	    VALUE actions = rb_ary_entry(rule, 1);
 	    rule = rb_ary_entry(values, fieldnum);
+	    encoding = ENCODING_GET(rule);
 	    if (RTEST(actions) && RARRAY_LEN(actions)) {
 		rule = apply_actions(rule, actions);
 	    }
@@ -71,16 +82,25 @@ spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
 		while (capa < pos + size + 1) {
 		    capa *= 2;
 		}
-		tmp = (char*) xrealloc(result, capa);
-		if (!tmp) { xfree(result); rb_memerror(); }
+		if (result == fixbuf)
+		    tmp = (char*) xmalloc(capa);
+		else
+		    tmp = (char*) xrealloc(result, capa);
+		if (!tmp) {
+		    if (result != fixbuf) xfree(result);
+		    rb_memerror();
+		}
 		result = tmp;
 	    }
+	    if (encoding == -1) encoding = ENCODING_GET(rule);
 	    strncpy(result + pos, RSTRING_PTR(rule), size + 1);
 	    pos += size;
 	}
     }
     res = rb_str_new(result, pos);
-    xfree(result);
+    ENCODING_SET(res, encoding);
+    ENC_CODERANGE_CLEAR(res);
+    if (result != fixbuf) xfree(result);
     return res;
 }
 
