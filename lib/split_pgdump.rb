@@ -265,7 +265,7 @@ class SplitPgDump::Table
             case action
             when Range
               field = field[action]
-            when Array
+            when Array # take modulo
               v = field.to_i
               field = action[0] % (v - v % action[1])
             end
@@ -274,6 +274,10 @@ class SplitPgDump::Table
         end
       end
       result
+    end
+
+    def native_compute_name?
+      false
     end
   end
   include ComputeName
@@ -297,16 +301,50 @@ class SplitPgDump::Table
   def apply_rule(rule)
     if rule
       unless rule.split_parts.empty?
-        @split_rule = rule.split_parts.map do |part|
-          case part
-          when Array # field manipulations
-            unless i = @columns.index(part[0])
-              raise NoColumn, "Table #{@schema}.#{@table} has no column #{part[0]} for use in split"
+        if native_compute_name?
+          @split_rule = rule.split_parts.map do |part|
+            case part
+            when Array # field manipulations
+              unless i = @columns.index(part[0])
+                raise NoColumn, "Table #{@schema}.#{@table} has no column #{part[0]} for use in split"
+              end
+              [i, part[1..-1]]
+            else
+              part
             end
-            [i, part[1..-1]]
-          else
-            part
           end
+        else
+          split_string = ''
+          split_rule = []
+          rule.split_parts.map do |part|
+            case part
+            when Array #field manipulation
+              unless i = @columns.index(part[0])
+                raise NoColumn, "Table #{@schema}.#{@table} has no column #{part[0]} for use in split"
+              end
+              field = "values[#{i}]"
+              part[1..-1].each do |action|
+                ssize = split_rule.size
+                case action
+                when Range
+                  field << "[split_rule[#{ssize}]]"
+                  split_rule << action
+                when Array # take module
+                  field = "_mod(#{field}, split_rule[#{ssize}], split_rule[#{ssize+1}])"
+                  split_rule.concat action
+                end
+              end
+              split_string << "\#{#{field}}"
+            when String
+              split_string << part
+            end
+          end
+          @split_rule = split_rule
+          eval <<-"EOF"
+            def self.compute_name(split_rule, values)
+              %{#{split_string}}
+            end
+          EOF
         end
         @file_name = {}
       end
