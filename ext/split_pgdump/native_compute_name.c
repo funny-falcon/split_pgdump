@@ -51,7 +51,7 @@ apply_actions(VALUE field, VALUE actions)
     return field;
 }
 
-#define INITIAL_CAPA 48
+#define INITIAL_CAPA 32
 static VALUE
 spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
 {
@@ -78,11 +78,8 @@ spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
 	    long size = RSTRING_LEN(rule);
 	    if (capa < pos + size + 1) {
 		char *tmp;
-		if (i + 1 == rule_len) {
-		    capa = pos + size + 1;
-		}
-		else
-		    while (capa < pos + size + 1) capa *= 2;
+		capa = pos + size + 1;
+		if (i + 1 != rule_len) capa = (capa * 3) >> 1;
 		tmp = (char*) xrealloc(result, capa);
 		if (!tmp) {
 		    xfree(result);
