@@ -30,7 +30,7 @@ apply_actions(VALUE field, VALUE actions)
 		  FIXNUM_P(modi) &&
 		  FIX2LONG(modi)) {
 		long modl = NUM2LONG(modi);
-		long numl = (FIX2LONG(num) / modl) * modl;
+		long numl = (NUM2LONG(num) / modl) * modl;
 		char buf[30];
 
 		int wrtn = snprintf(buf, 30,
