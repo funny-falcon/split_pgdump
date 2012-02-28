@@ -174,12 +174,15 @@ class SplitPgDump::Rule
     while !s.eos?
       if field = s.scan(/\$[^\[%!]+/)
         field = field[1..-1]
-        part = {:type => :field, :field => field, :actions => []}
+        part = [field]
         while !s.eos?
           if range = s.scan(/\[[+-]?\d+\.\.\.?[+-]?\d+\]/)
-            part[:actions] << {:range => range}
+            part << eval(range[1...-1])
           elsif mod = s.scan(/%\d+/)
-            part[:actions] << {:mod => mod[1..-1]}
+            mod = mod[1..-1]
+            format = "%0#{mod.size}d"
+            modi = mod.to_i
+            part << [format, modi]
           else
             break
           end
@@ -187,7 +190,7 @@ class SplitPgDump::Rule
         parts << part
         next if s.scan(/!/)
       elsif sep = s.scan(/[^$\s#\\]+/)
-        parts << {:type => :sep, :sep => sep}
+        parts << sep
         next
       end
       raise ParseError, "Wrong format of split expr #{split_expr} (rest: '#{s.rest}')"
@@ -213,6 +216,10 @@ class SplitPgDump::Table
       @file_name = File.join(dir, name)
       @cache_lines = []
       @cache_size = 0
+      dir = File.dirname(@file_name)
+      unless File.directory?(dir)
+        FileUtils.mkdir_p(dir)
+      end
     end
 
     def add_line(line)
@@ -222,10 +229,6 @@ class SplitPgDump::Table
 
     def flush(&block)
       @cache_size = 0
-      dir = File.dirname(@file_name)
-      unless File.directory?(dir)
-        FileUtils.mkdir_p(dir)
-      end
       content = @cache_lines.join
       File.open(@file_name, 'a'){|f| f.write(content)}
       @cache_lines.clear
@@ -249,23 +252,31 @@ class SplitPgDump::Table
     end
   end
 
-  module DefaultName
-    def file_name(line)
-      @file_name
-    end
-  end
-  include DefaultName
-
   module ComputeName
-    def file_name(line)
-      values = line.chomp.split("\t")
-      name = compute_name(values)
-      @file_name[name] ||= begin
-        name_strip = name.gsub(/\.\.|\s|\?|\*|'|"/, '_')
-        "#{table_schema}/#{name_strip}.dat"
+    def compute_name(split_rule, values)
+      result = ''
+      split_rule.each do |rule|
+        case rule
+        when String
+          result << rule
+        when Array
+          field = values[rule[0]]
+          rule[1].each do |action|
+            case action
+            when Range
+              field = field[action]
+            when Array
+              v = field.to_i
+              field = action[0] % (v - v % action[1])
+            end
+          end
+          result << field
+        end
       end
+      result
     end
   end
+  include ComputeName
 
   attr_reader :table, :columns, :files, :sort_line, :sort_args
   def initialize(dir, schema, name, columns, rule)
@@ -285,36 +296,19 @@ class SplitPgDump::Table
 
   def apply_rule(rule)
     if rule
-      split_string = ''
-      rule.split_parts.each do |part|
-        case part[:type]
-        when :sep
-          split_string << part[:sep]
-        when :field
-          i = @columns.find_index(part[:field])
-          raise NoColumn, "Table #{@schema}.#{@table} has no column #{part[:field]} for use in split"  unless i
-          field = "values[#{i}]"
-          part[:actions].each do |action|
-            if action[:mod]
-              mod_s = action[:mod]
-              mod = mod_s.to_i
-              field = "_mod(#{field}, '%0#{mod_s.size}d', #{mod})"
-            elsif action[:range]
-              field << "#{action[:range]}"
+      unless rule.split_parts.empty?
+        @split_rule = rule.split_parts.map do |part|
+          case part
+          when Array # field manipulations
+            unless i = @columns.index(part[0])
+              raise NoColumn, "Table #{@schema}.#{@table} has no column #{part[0]} for use in split"
             end
+            [i, part[1..-1]]
+          else
+            part
           end
-          split_string << "\#{#{field}}"
         end
-      end
-
-      if split_string > ''
         @file_name = {}
-        eval <<-"EOF"
-          def self.compute_name(values)
-            %{#{split_string}}
-          end
-        EOF
-        extend ComputeName
       end
 
       @sort_args = rule.sort_keys.map do |key|
@@ -333,11 +327,17 @@ class SplitPgDump::Table
   end
 
   def file_name(line)
-    @file_name
+    values = line.split("\t")
+    values.last.chomp!
+    name = compute_name(@split_rule, values)
+    @file_name[name] ||= begin
+      name_strip = name.gsub(/\.\.|\s|\?|\*|'|"/, '_')
+      "#{table_schema}/#{name_strip}.dat"
+    end
   end
 
   def add_line(line)
-    fname = file_name(line)
+    fname = @split_rule ? file_name(line) : @file_name
     one_file = @files[fname] ||= OneFile.new(@dir, fname)
     one_file.add_line(line)
     @total_cache_size += line.size
