@@ -57,8 +57,7 @@ spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
 {
     VALUE res = 0;
     int encoding = -1;
-    char fixbuf[INITIAL_CAPA];
-    char *result = fixbuf;
+    char *result = (char*) xmalloc(INITIAL_CAPA);
     int pos = 0, capa = INITIAL_CAPA;
     long i, rule_len = RARRAY_LEN(split_rule);
     if (!result) {
@@ -82,12 +81,9 @@ spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
 		while (capa < pos + size + 1) {
 		    capa *= 2;
 		}
-		if (result == fixbuf)
-		    tmp = (char*) xmalloc(capa);
-		else
-		    tmp = (char*) xrealloc(result, capa);
+		tmp = (char*) xrealloc(result, capa);
 		if (!tmp) {
-		    if (result != fixbuf) xfree(result);
+		    xfree(result);
 		    rb_memerror();
 		}
 		result = tmp;
@@ -100,7 +96,7 @@ spgd_compute_name(VALUE self, VALUE split_rule, VALUE values)
     res = rb_str_new(result, pos);
     ENCODING_SET(res, encoding);
     ENC_CODERANGE_CLEAR(res);
-    if (result != fixbuf) xfree(result);
+    xfree(result);
     return res;
 }
 
