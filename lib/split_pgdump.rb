@@ -126,7 +126,7 @@ class SplitPgDump::Worker
           io.puts sort_args
         }
         io.close_write
-        io.each_line{|l| 
+        io.each_line{|l|
           puts l  if $debug
         }
       end
@@ -234,10 +234,12 @@ class SplitPgDump::Table
     end
 
     def flush(&block)
-      @cache_size = 0
-      content = @cache_lines.join
-      File.open(@file_name, 'a'){|f| f.write(content)}
-      @cache_lines.clear
+      if @cache_size > 0
+        @cache_size = 0
+        content = @cache_lines.join
+        File.open(@file_name, 'a'){|f| f.write(content)}
+        @cache_lines.clear
+      end
     end
 
     def write_finish
@@ -303,6 +305,7 @@ class SplitPgDump::Table
     @file_name = "#{table_schema}.dat"
     apply_rule rule
     @files = {}
+    @files_to_flush = {}
     @total_cache_size = 0
   end
 
@@ -394,12 +397,16 @@ class SplitPgDump::Table
     if one_file.cache_size > ONE_FILE_CACHE_SIZE
       @total_cache_size -= one_file.cache_size
       one_file.flush
+      @files_to_flush.delete(one_file)
+    else
+      @files_to_flush[one_file] = true
     end
     flush_all if @total_cache_size > TOTAL_CACHE_SIZE
   end
 
   def flush_all
-    @files.each{|name, one_file| one_file.flush}
+    @files_to_flush.each{|one_file, _| one_file.flush }
+    @files_to_flush.clear
     @total_cache_size = 0
   end
 
