@@ -57,7 +57,7 @@ class SplitPgDump::Worker
       rule = find_rule("#@schema.#{table_name}")
       @table = SplitPgDump::Table.new(tables_dir, @schema, table_name, columns, rule)
       @tables << @table
-      puts "Start to write table #{table_name}" if $debug
+      puts "Start to write table \t#{table_name}" if $debug
       @start_time = Time.now
       @state = :table
     else
@@ -72,7 +72,7 @@ class SplitPgDump::Worker
     if line =~ /^\\\.[\r\n]/
       @table.flush_all
       @table.copy_lines{|l| out.puts l}
-      puts "Table #{@table.table} copied in #{Time.now - @start_time}s" if $debug
+      puts "Table #{@table.table} copied in \t#{"%.2f" % (Time.now - @start_time)}s" if $debug
       @table = nil
       @state = :schema
     else
